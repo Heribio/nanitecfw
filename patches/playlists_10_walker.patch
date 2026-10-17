@@ -1,0 +1,5 @@
+# Library walker (mod39): also hand .m3u / .m3u8 files to the CFW (cfw_tags sees ext "M3U").
+# The extension list is a 16 x 3 byte array copied to the walker's stack (0x0307a8c0, 15 used + a
+# 0 terminator); "MP1" (MPEG layer 1, practically unused) becomes "M3U". The 8.3 extension of
+# "x.m3u8" is "M3U". Stage 1 only counts and logs the tracks; the file is not added as a song.
+39:0307a8c0:4d3355             # "MP1" -> "M3U"

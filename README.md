@@ -25,11 +25,58 @@ on your computer.
 | **Album Artists / Artists**: the stock Artists list, which groups by album artist, is renamed "Album Artists"; a new "Artists" list groups by each track's own artist | tested on device |
 | `CFWLOG.TXT` in the card's root after each refresh: timings and counters | tested on device |
 | **Power saving**: lower CPU clocks during playback (decode core 144-288 MHz instead of 350-450 MHz for MP3, AAC, WMA, WAV, OGG, FLAC and ALAC), the CPU sleeps between events with the screen on, and the scroll wheel is polled every 1 ms instead of every 0.4 ms | new in 6.0.5; battery gain not measured |
+| **Now Playing: album or artist** on the second line, chosen with `now_playing_album` in `settings.txt` (default off = stock artist; the person icon becomes a music note) | new in 8.0.1; not yet tested on device |
+| **Playlists** (Media Library → Playlists): `.m3u` / `.m3u8` files anywhere on the card are read at refresh | new in 8.0.2; works on device |
 
-About shows the custom version (6.0.x) instead of the stock version.
+About shows the custom version (8.0.x) instead of the stock version.
 
 After flashing, run **Media Library → Media Library Refresh** once: Recent Albums
 and Artists need data the stock refresh doesn't write.
+
+### settings.txt and the Now Playing line
+
+Now Playing shows the artist on its second line, as stock does. To show the **album**
+instead, create a text file named `settings.txt` and run **Media Library Refresh**:
+
+```
+# CFW settings
+now_playing_album=1
+```
+
+- **Where**: on the card the library is built from. With the songs on the microSD card, put
+  it on the microSD card (the root is recommended; any folder the refresh scans works, and
+  if several exist the last one found wins). A copy on the internal storage is not seen.
+- **Format**: `key=value` lines; `#` starts a comment; case, blanks and CRLF do not matter;
+  ASCII, UTF-8 (with or without BOM) and UTF-16 text all work. `now_playing_album` is on for
+  `1`, `on`, `yes`, `true`, and off for anything else or when the line, or the file, is missing.
+- **When it applies**: at the end of every refresh the value is stored in the library
+  database (one sector, `base + 0x58240`). Now Playing reads it from there the first time it
+  draws a line and caches it in RAM (a cave in resident mod00, `0x03073f00`); the refresh
+  resets that cache and the firmware's own sector cache, so the change shows without a
+  reboot. Nothing is written to your card: the file is only ever read, and a refresh logs
+  `settings.txt found, now_playing_album N` (or `absent`) in `CFWLOG.TXT`.
+- **How**: the two instructions of Now Playing (mod27 `0x0307adf6`, `0x0307ae00`) that take
+  the artist from the play-time tag buffer (`+0x15e`) call a helper that picks the artist or
+  the album (`+0x25c`) from that stored value. A track without an album tag shows an empty
+  line. The icon beside the line (image 104) is a music note, which fits both.
+- **Side effect**: the library walker now also hands `.txt` files to the CFW, using the
+  extension slot of `MP2` (MPEG layer 2, practically unused), so `.mp2` files are no longer
+  indexed. The CFW skips every `.txt` file except for reading `settings.txt`; they are not
+  songs.
+
+### Playlists
+
+Put `.m3u` or `.m3u8` files anywhere on the card (UTF-8, one song per line, `#` lines
+ignored) and run **Media Library Refresh**. A line is matched to a song by its last two
+path parts, the folder name and the file name (`Hot Fuss/01 Jenny.mp3`; upper and lower
+case are ignored, any folders above are ignored). A line without a folder, or with a wrong
+one, still matches when that file name exists only once on the card. Playlists are named like
+the file (without extension), in the order the card lists them; a playlist with no matching song
+is not shown. They are listed at **Media Library → Playlists**; open one to see its songs in
+playlist order and play them.
+`CFWLOG.TXT` lists each playlist with its found and missing tracks. Limits: 64 playlists,
+8192 entries in total. `MP1` files (MPEG layer 1) are no longer indexed: their extension
+slot now serves `M3U`.
 
 ## Requirements
 
@@ -66,7 +113,7 @@ over this one, raise the date by a day each time (`make DATE=20260826`, ...).
 1. Connect the Echo Nano by USB and copy `out/NANOV170.IMG` to the root of its
    internal storage.
 2. Eject it and restart the player; it installs the update while it boots.
-3. Check **About**: it should show `6.0.x`.
+3. Check **About**: it should show `8.0.x`.
 4. Run **Media Library Refresh** once.
 
 ## Recovery
@@ -88,7 +135,9 @@ newer-dated custom build is installed.
 ## Known issues
 
 - Back from the new **Artists** list lands on **Album Artists**, and Back from
-  **Recent Albums** lands on **Albums**.
+  **Recent Albums** and **Playlists** lands on **Albums**.
+- In **Playlists** the first track of each playlist is played from a copy of its record
+  (stored after the last song), so that the list can show the playlist's name.
 - Both artist lists use the same list type internally. If a song plays from one
   of them and you pick the song at the same position in the other, the player
   reopens Now Playing instead of starting the new song.

@@ -1,0 +1,4 @@
+# Library walker (mod39): also hand .txt files to the CFW (cfw_tags sees ext "TXT"); it
+# reads settings.txt from them. "MP2" (MPEG layer 2, practically unused) becomes "TXT" in the
+# extension list (see playlists_10_walker.patch).
+39:0307a8c3:545854              # "MP2" -> "TXT"

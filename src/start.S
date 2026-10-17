@@ -43,6 +43,34 @@ cfw_hook_file:
     mov     r3, sl
     b       cfw_file_record
 
+@ mod39 0x0307b08a / 0x0307b092: the walker's counters after storing a song record
+@ (add.w r0, sl, #1 / add.w r0, r9, #1, each followed by uxth into sl / r9).
+@ Not for a playlist (cfw_skip): there was no record. r1-r3 are dead here.
+    .global cfw_inc_sl
+    .type cfw_inc_sl, %function
+cfw_inc_sl:
+    ldr     r1, =cfw_skip
+    ldrb    r1, [r1]
+    cmp     r1, #0
+    ite     eq
+    addeq   r0, sl, #1
+    movne   r0, sl
+    bx      lr
+
+    .global cfw_inc_slot
+    .type cfw_inc_slot, %function
+cfw_inc_slot:                   @ last user of the flag: clear it
+    ldr     r2, =cfw_skip
+    ldrb    r1, [r2]
+    cmp     r1, #0
+    ite     eq
+    addeq   r0, r9, #1
+    movne   r0, r9
+    movs    r1, #0
+    strb    r1, [r2]
+    bx      lr
+    .ltorg
+
 @ u32 fread_orig(void *dst, u32 n, u32 h) - the stock file read (mod00
 @ 0x0305c3fa) while cfw_fread_hook has replaced its first instruction.
     .global fread_orig

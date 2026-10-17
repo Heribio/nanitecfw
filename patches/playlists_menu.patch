@@ -1,0 +1,25 @@
+# Playlists: Media Library menu label and browser title (the menu entry is in
+# library_menu.patch, its dispatcher case in library_menu_40_mod22_dispatch.S).
+
+# String 0x83 ("Connection Successful", unused: no Bluetooth hardware) -> label.
+lang:83:zh-cn:u"播放列表"
+lang:83:zh-tw:u"播放清單"
+lang:83:en:u"Playlists"
+lang:83:ja:u"プレイリスト"
+lang:83:ko:u"재생목록"
+lang:83:fr:u"Playlists"
+lang:83:de:u"Wiedergabelisten"
+lang:83:it:u"Playlist"
+lang:83:es:u"Listas de reproducción"
+lang:83:pt:u"Listas de reprodução"
+lang:83:ru:u"Плейлисты"
+lang:83:sv:u"Spellistor"
+lang:83:th:u"เพลย์ลิสต์"
+lang:83:pl:u"Playlisty"
+lang:83:da:u"Afspilningslister"
+lang:83:nl:u"Afspeellijsten"
+lang:83:el:u"Λίστες αναπαραγωγής"
+lang:83:cs:u"Seznamy skladeb"
+lang:83:tr:u"Çalma listeleri"
+lang:83:he:u"רשימות השמעה"
+lang:83:ar:u"قوائم التشغيل"

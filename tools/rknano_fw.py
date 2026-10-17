@@ -26,9 +26,16 @@ Commands:
                  VALUE = hex bytes, u"text" (UTF-16LE + NUL) or a"text" (ASCII + NUL)
          PATCH = lang:ID:LANG:u"text"  replace UI string ID (hex) in language
                  LANG (index, code from LANGS, or * for all)
+         PATCH = img:ID:ROWS  replace the pixels of UI image ID (decimal); ROWS are
+                 the image rows separated by "/", "X" = lit pixel, "." = off.
+                 Size must match the stock image (see images section below).
          --date YYYYMMDD sets the build date (default: keep)
          IMG must be a known stock image (STOCK), else --any-input
   check  IMG                       is IMG a known stock image?
+
+images section: 32-byte header, then 16-byte entries per image ID
+(s16 width, s16 height, 4 bytes, u32 byte size, u32 data offset), pixels are
+u16 each, 0x0000 = lit, 0xFFFF = off.
 
 lang section: u16 count, u32[count] block offsets; each block is LANG_SLOTS
 slots of LANG_SLOT bytes: 58-byte header (u16 id, ..., prev, next) followed
@@ -185,6 +192,27 @@ class Image:
         return off
 
 
+def _img_entry(self, iid):
+    sec = next(s for s in self.sections if s["name"] == "images")
+    ent = sec["offset"] + 32 + iid * 16
+    w, h, _, _, size, off = struct.unpack_from("<hhhhII", self.d, ent)
+    if not (0 <= iid < 302) or w <= 0 or h <= 0 or size != w * h * 2:
+        raise ValueError("image %d: unexpected header (%dx%d, %d bytes)" % (iid, w, h, size))
+    return w, h, sec["offset"] + off
+
+
+def patch_image(self, iid, w, h, data):
+    iw, ih, off = self._img_entry(iid)
+    if (iw, ih) != (w, h):
+        raise ValueError("image %d is %dx%d, patch is %dx%d" % (iid, iw, ih, w, h))
+    self.d[off:off + len(data)] = data
+    return off
+
+
+Image._img_entry = _img_entry
+Image.patch_image = patch_image
+
+
 def load(path):
     with open(path, "rb") as f:
         return Image(f.read())
@@ -249,6 +277,15 @@ def parse_patches(args):
             for l in langs:
                 yield "lang", (l, int(sid, 16)), _value(val)
             continue
+        if a.startswith("img:"):
+            _, iid, rows = a.split(":", 2)
+            rows = rows.split("/")
+            w, h = len(rows[0]), len(rows)
+            if any(len(r) != w or set(r) - set("X.") for r in rows):
+                raise ValueError("img:%s: rows must be equal-length strings of X and ." % iid)
+            data = b"".join(struct.pack("<H", 0 if c == "X" else 0xFFFF) for r in rows for c in r)
+            yield "img", (int(iid), w, h), data
+            continue
         mod, addr, val = a.split(":", 2)
         yield int(mod, 0), int(addr, 16), _value(val)
 
@@ -300,6 +337,10 @@ def main(argv):
                 off = im.patch_lang(*addr, data)
                 print("lang %s string 0x%x (file 0x%x): %r" % (
                     LANGS[addr[0]], addr[1], off, data.decode("utf-16le").rstrip("\0")))
+                continue
+            if mod == "img":
+                off = im.patch_image(*addr, data)
+                print("image %d %dx%d (file 0x%x)" % (addr[0], addr[1], addr[2], off))
                 continue
             off = im.patch(mod, addr, data)
             print("mod %d 0x%08x (file 0x%x): %s" % (mod, addr, off, data.hex()))

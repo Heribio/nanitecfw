@@ -32,13 +32,13 @@
 #include "prof.h"
 
 #define FOLDER_TAB ((struct folder *)0x03092400)  /* only mod40 maps here; free during the walk */
-#define FOLDER_MAX 3584
-#define WIN_BUF    ((u8 *)(FOLDER_TAB + FOLDER_MAX)) /* 0x03099400, read window, same reason */
+#define FOLDER_MAX 2389                         /* 12 bytes each, up to the window below */
+#define WIN_BUF    ((u8 *)0x03099400)           /* read window, same reason */
 #define WIN_SIZE   0x1000
-#define LOG_FOLDERS 12
-#define LOG_ALBUMS 12
+#define LOG_FOLDERS 4
+#define LOG_ALBUMS 4
 
-struct folder { u32 cluster, date; };
+struct folder { u32 cluster, date, hash; };   /* hash: folded name, see fold_hash */
 
 /* sort fields in compact-store order */
 #define NFIELDS 6
@@ -72,6 +72,7 @@ static union {
         u8 keys[NFIELDS][512];
         u32 hashes[NFIELDS][128];
         u32 dates[128];
+        u32 mfile[128], mpar[128];              /* playlist match keys */
         int ksec, hsec;                         /* buffered sector index, -1 = none */
     } w;
     struct {                                    /* sort: read caches */
@@ -85,7 +86,7 @@ static union {
 
 /* ---- log ---------------------------------------------------------------- */
 
-static char logbuf[4096] __attribute__((aligned(4)));
+static char logbuf[1792] __attribute__((aligned(4)));
 static u32 loglen;
 
 static void log_printf(const char *fmt, ...)
@@ -162,21 +163,45 @@ static u32 key_hash(const u16 *s)
     return h;
 }
 
+/*
+ * Playlist match keys: FNV-1a over UTF-16 units, ASCII case folded, so "Song.FLAC" in a
+ * playlist finds "song.flac" on the card. 0 is reserved for "no folder given".
+ */
+#define FH_INIT 2166136261u
+
+static u32 fh_unit(u32 h, u32 u)
+{
+    if (u - 'A' < 26)
+        u += 32;
+    h = (h ^ (u & 0xff)) * 16777619u;
+    return (h ^ (u >> 8)) * 16777619u;
+}
+
+static u32 fold_hash(const u16 *s)
+{
+    u32 h = FH_INIT;
+    for (u32 i = 0; i < 0x80 && s[i]; i++)
+        h = fh_unit(h, s[i]);
+    return h ? h : 1;
+}
+
 /* ---- walk (mod39) --------------------------------------------------------- */
 
-static u32 folder_date(u32 cluster)
+static void folder_info(u32 cluster, u32 *date, u32 *hash)
 {
-    static u32 last_cluster = ~0u, last_date;
-    if (cluster == last_cluster)
-        return last_date;
-    last_cluster = cluster;
-    last_date = 0;
-    for (u32 i = st.folders; i--;)
-        if (FOLDER_TAB[i].cluster == cluster) {
-            last_date = FOLDER_TAB[i].date;
-            break;
-        }
-    return last_date;
+    static u32 last_cluster = ~0u, last_date, last_hash;
+    if (cluster != last_cluster) {
+        last_cluster = cluster;
+        last_date = last_hash = 0;
+        for (u32 i = st.folders; i--;)
+            if (FOLDER_TAB[i].cluster == cluster) {
+                last_date = FOLDER_TAB[i].date;
+                last_hash = FOLDER_TAB[i].hash;
+                break;
+            }
+    }
+    *date = last_date;
+    *hash = last_hash;
 }
 
 static u32 rd32(const u8 *p) { return rd16(p) | (u32)rd16(p + 2) << 16; }
@@ -226,6 +251,7 @@ int cfw_dir_record(u8 *dst, u8 *src, int is_file, const u8 *sp)
     if (st.folders < FOLDER_MAX) {
         FOLDER_TAB[st.folders].cluster = cluster;
         FOLDER_TAB[st.folders].date = date;
+        FOLDER_TAB[st.folders].hash = fold_hash((const u16 *)src);
         st.folders++;
     } else {
         st.folders_dropped++;
@@ -243,10 +269,12 @@ static void compact_flush(void)
         for (int f = 0; f < NFIELDS; f++)
             write_secs(b + SEC_HASHES + f * 0x40 + buf.w.hsec, 1, buf.w.hashes[f]);
         write_secs(b + SEC_DATES + buf.w.hsec, 1, buf.w.dates);
+        write_secs(b + SEC_MFILE + buf.w.hsec, 1, buf.w.mfile);
+        write_secs(b + SEC_MPARENT + buf.w.hsec, 1, buf.w.mpar);
     }
 }
 
-static void compact_put(u32 recno, const u8 *rec, u32 date)
+static void compact_put(u32 recno, const u8 *rec, u32 date, u32 mfile, u32 mpar)
 {
     int ks = recno >> 6, hs = recno >> 7;
     if (ks != buf.w.ksec || hs != buf.w.hsec) {
@@ -258,6 +286,8 @@ static void compact_put(u32 recno, const u8 *rec, u32 date)
         if (hs != buf.w.hsec) {
             __builtin_memset(buf.w.hashes, 0, sizeof buf.w.hashes);
             __builtin_memset(buf.w.dates, 0, sizeof buf.w.dates);
+            __builtin_memset(buf.w.mfile, 0, sizeof buf.w.mfile);
+            __builtin_memset(buf.w.mpar, 0, sizeof buf.w.mpar);
             buf.w.hsec = hs;
         }
     }
@@ -266,6 +296,8 @@ static void compact_put(u32 recno, const u8 *rec, u32 date)
         buf.w.hashes[f][recno & 127] = key_hash((const u16 *)(rec + field_off[f]));
     }
     buf.w.dates[recno & 127] = date;
+    buf.w.mfile[recno & 127] = mfile;
+    buf.w.mpar[recno & 127] = mpar;
 }
 
 /* ARTIST of the file whose tags were just read (cfw_tags), for the next song record */
@@ -273,8 +305,131 @@ static u16 track_artist[0x80];
 static int track_artist_set;
 
 /* recno = walker's song counter (r10) */
+/* ---- playlists (walk side) ------------------------------------------------ */
+
+static struct {
+    u32 n;                      /* playlists with an info sector */
+    u32 next_sec;               /* next free line sector, relative to SEC_PL_LINES */
+    u32 cur_first, cur_lines;   /* the playlist cfw_tags just read, until its info is written */
+    u32 truncated;
+} pl;
+
+/* name of the playlist file the walker is on (mkrec source +0, UTF-16), without its extension */
+static void playlist_info(const u16 *name)
+{
+    u32 sec[128] __attribute__((aligned(4)));
+    u16 *nm = (u16 *)(sec + 2);
+    u32 n = 0, dot = 0;
+    __builtin_memset(sec, 0, sizeof sec);
+    sec[0] = pl.cur_first;
+    sec[1] = pl.cur_lines;
+    for (; n < 0x7f && name[n]; n++) {
+        nm[n] = name[n];
+        if (name[n] == '.')
+            dot = n;
+    }
+    if (dot)
+        nm[dot] = 0;
+    if (pl.n < PL_MAX)
+        write_secs(st.base + SEC_PL_INFO + pl.n++, 1, sec);
+}
+
+/* set while the walker is on a playlist file: no record, no counters (cfw_inc_* in start.S) */
+volatile u8 cfw_skip;
+
+/* ---- settings.txt ---------------------------------------------------------- */
+
+#define fw_fread ((u32 (*)(void *, u32, u32))(FREAD_ADDR | 1))
+static u8 txt_pending;          /* the walker is on a .txt file */
+static int txt_album;           /* now_playing_album value read from it */
+static int set_album;           /* ... from the settings.txt (named so) */
+static int set_found;
+
+/* "now_playing_album = on|1|yes|true" (case-insensitive, '#' starts a comment line) */
+static int parse_settings(u32 h)
+{
+    const struct file *f = (const struct file *)(FILES + h * FILE_SIZE);
+    char b[512];
+    u32 n = f->size < sizeof b - 1 ? f->size : sizeof b - 1;
+    int v = 0;
+    if (fw_fseek(0, 0, h) != 0)
+        return 0;
+    u32 got = fw_fread(b, n, h);
+    if (!got || got > n)
+        return 0;
+    b[got] = 0;
+    for (u32 i = 0; i < got;) {
+        char c[40];
+        u32 k = 0;
+        /* only printable ASCII counts: BOMs, UTF-16 NULs and blanks are ignored */
+        while (i < got && b[i] != '\n' && b[i] != '\r') {
+            u8 ch = b[i];
+            if (ch > ' ' && ch < 0x7f && k < sizeof c - 1)
+                c[k++] = ch >= 'A' && ch <= 'Z' ? ch + 32 : ch;
+            i++;
+        }
+        i++;
+        c[k] = 0;
+        static const char key[] = "now_playing_album=";
+        u32 j = 0;
+        while (key[j] && c[j] == key[j])
+            j++;
+        if (key[j])
+            continue;
+        const char *p = c + j;
+        v = p[0] == '1' || (p[0] == 'o' && p[1] == 'n') || p[0] == 'y' || p[0] == 't';
+    }
+    return v;
+}
+
+static int name_is_settings(const u16 *n)
+{
+    static const char s[] = "settings.txt";
+    u32 i = 0;
+    for (; s[i]; i++) {
+        u16 c = n[i];
+        if (c >= 'A' && c <= 'Z')
+            c += 32;
+        if (c != s[i])
+            return 0;
+    }
+    return n[i] == 0;
+}
+
+/* after the walk: store the setting for the Now Playing patch */
+static void settings_done(void)
+{
+    u32 sec[128] __attribute__((aligned(4)));
+    __builtin_memset(sec, 0, sizeof sec);
+    sec[0] = SETTINGS_MAGIC;
+    sec[1] = set_found ? set_album : 0;
+    write_secs(st.base + SEC_SETTINGS, 1, sec);
+    NP_STATE = 0;                                   /* reread at the next Now Playing */
+    /* fw_read keeps 3 sectors of device 0x30001 (numbers at 0x03005c48, ~0 = empty) and
+     * fw_write does not drop them: forget them, or a sector Now Playing read before the
+     * refresh stays stale */
+    for (int i = 0; i < 3; i++)
+        ((volatile u32 *)0x03005c48)[i] = ~0u;
+    log_printf("settings.txt %s, now_playing_album %d\r\n", set_found ? "found" : "absent (put it in the root of the card the library is on)", (int)sec[1]);
+}
+
 int cfw_file_record(u8 *dst, u8 *src, int is_file, u32 recno)
 {
+    if (cfw_skip) {
+        if (txt_pending) {
+            txt_pending = 0;
+            int ok = name_is_settings((const u16 *)src);
+            log_printf("txt %s: album %d\r\n", ok ? "settings" : "other", txt_album);
+            if (ok) {
+                set_found = 1;
+                set_album = txt_album;
+            }
+        } else {
+            playlist_info((const u16 *)src);
+        }
+        return 0;
+    }
+    u32 fh = fold_hash((const u16 *)src);
     int r = mod39_mkrec(dst, src, is_file);
     /* cue tracks and untagged files: same as the stock artist */
     __builtin_memcpy(dst + REC_TRACK_ARTIST, track_artist_set && track_artist[0] ? track_artist : (u16 *)(dst + 0x500), 0x100);
@@ -283,14 +438,15 @@ int cfw_file_record(u8 *dst, u8 *src, int is_file, u32 recno)
     if (recno >= MAX_SONGS)
         return r;
     u32 t = now_us();
-    u32 date = folder_date(*(u32 *)dst);    /* record +0: cluster of the song's folder */
+    u32 date, ph;
+    folder_info(*(u32 *)dst, &date, &ph);   /* record +0: cluster of the song's folder */
     *(u32 *)(dst + REC_DATE) = date;
     if (date)
         st.songs_dated++;
     if (recno != st.songs)
         st.seq_err++;                       /* compact store needs consecutive recnos */
     st.songs = recno + 1;
-    compact_put(recno, dst, date);
+    compact_put(recno, dst, date, fh, ph);
     st.us_hooks += now_us() - t;
     return r;
 }
@@ -398,8 +554,120 @@ static u32 tag_calls[TAG_KINDS], tag_us[TAG_KINDS], tag_max[TAG_KINDS];
 
 /* mod39 0x0307af66: bl fw_tags(h, rec, ext). rec is the walker's tag buffer;
  * after we return the walker copies its album artist (+0x458) over the artist. */
+/* ---- playlists (M3U: parse during the walk) -------------------------------- */
+
+#define fw_fread ((u32 (*)(void *, u32, u32))(FREAD_ADDR | 1))
+
+/*
+ * The walker accepts "M3U" (patches/playlists_10_walker.patch) and hands us the open file.
+ * Every track line (not empty, not "#...") is reduced to (hash of its folder name, hash of its
+ * file name): the last two path components, "/" or "\\", UTF-8 -> UTF-16, case folded. Lines are
+ * staged in DB sectors, 64 per sector, each playlist starting on a fresh sector; the matching to
+ * song records happens after the sort (build_playlists).
+ */
+static void playlist_scan(u32 h)
+{
+    const struct file *f = (const struct file *)(FILES + h * FILE_SIZE);
+    u32 size = f->size, pos = 0, tracks = 0, fill = 0, sec = pl.next_sec;
+    u32 dir_h = 0, cur_h = FH_INIT, cur_len = 0, cp = 0, need = 0;
+    int bol = 1, comment = 0;
+    u32 ent[128] __attribute__((aligned(4)));
+    u8 b[128];
+
+    if (fw_fseek(0, 0, h) == 0) {
+        while (pos < size) {
+            u32 n = size - pos < sizeof b ? size - pos : sizeof b;
+            u32 got = fw_fread(b, n, h);
+            if (!got || got > n)
+                break;
+            u32 i = 0;
+            if (pos == 0 && got >= 3 && b[0] == 0xef && b[1] == 0xbb && b[2] == 0xbf)
+                i = 3;                                  /* UTF-8 BOM */
+            for (; i < got; i++) {
+                u8 c = b[i];
+                if (c == '\r')
+                    continue;
+                if (c == '\n') {
+                    if (!comment && cur_len) {
+                        tracks++;
+                        ent[fill * 2] = dir_h;
+                        ent[fill * 2 + 1] = cur_h ? cur_h : 1;
+                        if (++fill == 64) {
+                            if (sec < PL_LINE_SECS)
+                                write_secs(st.base + SEC_PL_LINES + sec, 1, ent);
+                            else
+                                pl.truncated++;
+                            sec++;
+                            fill = 0;
+                        }
+                    }
+                    dir_h = 0, cur_h = FH_INIT, cur_len = 0, need = 0;
+                    bol = 1, comment = 0;
+                    continue;
+                }
+                if (bol)
+                    comment = c == '#', bol = 0;
+                if (comment)
+                    continue;
+                if (c == '/' || c == '\\') {                /* component boundary */
+                    if (cur_len)
+                        dir_h = cur_h ? cur_h : 1;
+                    cur_h = FH_INIT, cur_len = 0, need = 0;
+                } else if (c < 0x80) {
+                    cur_h = fh_unit(cur_h, c), cur_len++;
+                } else if (c >= 0xc0) {                 /* UTF-8 lead byte */
+                    need = c >= 0xf0 ? 3 : c >= 0xe0 ? 2 : 1;
+                    cp = c & (0x3f >> need);
+                } else if (need) {                      /* continuation */
+                    cp = cp << 6 | (c & 0x3f);
+                    if (!--need) {
+                        if (cp >= 0x10000) {
+                            cp -= 0x10000;
+                            cur_h = fh_unit(cur_h, 0xd800 + (cp >> 10));
+                            cur_h = fh_unit(cur_h, 0xdc00 + (cp & 0x3ff));
+                        } else {
+                            cur_h = fh_unit(cur_h, cp);
+                        }
+                        cur_len++;
+                    }
+                }
+            }
+            pos += got;
+        }
+        if (!comment && cur_len) {                      /* last line without a newline */
+            tracks++;
+            ent[fill * 2] = dir_h;
+            ent[fill * 2 + 1] = cur_h ? cur_h : 1;
+            fill++;
+        }
+    }
+    if (fill) {
+        __builtin_memset(ent + fill * 2, 0, (64 - fill) * 8);
+        if (sec < PL_LINE_SECS)
+            write_secs(st.base + SEC_PL_LINES + sec, 1, ent);
+        else
+            pl.truncated++;
+        sec++;
+    }
+    pl.cur_first = pl.next_sec;
+    pl.cur_lines = tracks;
+    pl.next_sec = sec;
+}
+
 int cfw_tags(u32 h, u8 *rec, const char *ext)
 {
+    if (ext[0] == 'T' && ext[1] == 'X' && ext[2] == 'T') {
+        txt_album = parse_settings(h);
+        txt_pending = 1;
+        cfw_skip = 1;                               /* not a song */
+        return -1;
+    }
+    if (ext[0] == 'M' && ext[1] == '3' && ext[2] == 'U') {
+        playlist_scan(h);
+        cfw_skip = 1;                               /* not a song */
+        return -1;
+    }
+    cfw_skip = 0;
     u32 t = now_us();
     int r = fw_tags(h, rec, ext);
     t = now_us() - t;
@@ -601,6 +869,99 @@ static void build_recent(void)
     }
 }
 
+/* ---- playlists (after the sort: match lines, write the browser tables) ------ */
+
+/*
+ * A line matches the first song whose file name hash is equal and, when the line has a folder,
+ * whose parent folder hash is equal too. Failing that, a file name that exists exactly once on
+ * the card matches (playlists made on another computer rarely have the same folders).
+ */
+static int pl_resolve(const u32 *mf, const u32 *mp, u32 n, u32 dh, u32 fh, int *loose)
+{
+    int first = -1, any = -1;
+    u32 same = 0;
+    for (u32 s = 0; s < n; s++)
+        if (mf[s] == fh) {
+            same++, any = s;
+            if (first < 0 && (!dh || mp[s] == dh))
+                first = s;
+        }
+    *loose = first < 0 && same == 1;
+    return first >= 0 ? first : *loose ? any : -1;
+}
+
+/*
+ * Tables for the Playlists list (the Albums browser reads them, patches/playlists_*.S):
+ *   song list  u16 record number per entry, the playlists one after the other
+ *   groups     8 bytes per playlist {start, start, count, 0}; entry 0 u16[3] = playlist count
+ * The browser names a group after the album of its first song's record, so the first entry of
+ * every playlist is a copy of its first track's record (stored past the last song, where nothing
+ * lists it) with the album field set to the playlist's name.
+ */
+static void build_playlists(void)
+{
+    u16 *list = (u16 *)GROUPS, *grp = list + MAX_SONGS;
+    u32 b = st.base, n = st.songs, nl = 0, ng = 0;
+    __builtin_memset(grp, 0, 512);
+    if (pl.n && compact_ok()) {
+        u32 *mf = (u32 *)KEYS, *mp = mf + MAX_SONGS;    /* 2 x 32 KB in the idle sort buffer */
+        read_secs(b + SEC_MFILE, (n * 4 + 511) / 512, mf);
+        read_secs(b + SEC_MPARENT, (n * 4 + 511) / 512, mp);
+        if (pl.truncated)
+            log_printf("playlists: line area full, %u sectors dropped\r\n", pl.truncated);
+        __builtin_memset(list, 0, MAX_SONGS * 2);
+
+        for (u32 p = 0; p < pl.n; p++) {
+            u32 info[128] __attribute__((aligned(4))), ent[128] __attribute__((aligned(4)));
+            u32 matched = 0, by_name = 0, miss = 0, start = nl, dup = n + ng;
+            int first_rec = -1;
+            read_secs(b + SEC_PL_INFO + p, 1, info);
+            u32 first = info[0], lines = info[1];
+            if (lines > PL_LINE_SECS * 64 || first > PL_LINE_SECS || first + (lines + 63) / 64 > PL_LINE_SECS) {
+                log_printf("playlist %u: bad info (first %u, lines %u), skipped\r\n", p + 1, first, lines);
+                continue;
+            }
+            for (u32 i = 0; i < lines; i++) {
+                if (!(i & 63))
+                    read_secs(b + SEC_PL_LINES + first + i / 64, 1, ent);
+                int loose, r = pl_resolve(mf, mp, n, ent[(i & 63) * 2], ent[(i & 63) * 2 + 1], &loose);
+                if (r < 0 || nl >= MAX_SONGS || dup >= MAX_SONGS || ng >= PL_MAX) {
+                    miss++;
+                    continue;
+                }
+                matched++, by_name += loose;
+                if (nl == start) {                      /* first track: the named copy */
+                    first_rec = r;
+                    r = dup;
+                }
+                list[nl++] = r;
+            }
+            if (p < 8) {
+                log_printf("playlist %u \"", p + 1);
+                log_utf16((const u16 *)(info + 2), 40);
+                log_printf("\": %u tracks, %u found (%u by name only), %u missing\r\n", lines, matched, by_name, miss);
+            }
+            if (!matched)
+                continue;
+
+            /* first track's record, named after the playlist */
+            u16 *rec = (u16 *)buf.out;
+            read_secs(b + first_rec * 4, 4, rec);
+            __builtin_memset(rec + 0x300, 0, 0x100);
+            __builtin_memcpy(rec + 0x300, info + 2, 0xfe);
+            write_secs(b + dup * 4, 4, rec);
+
+            grp[ng * 4] = grp[ng * 4 + 1] = start;
+            grp[ng * 4 + 2] = nl - start;
+            ng++;
+        }
+        write_secs(b + SEC_PL_SONGS, MAX_SONGS * 2 / 512, list);
+        log_printf("playlists: %u shown, %u entries\r\n", ng, nl);
+    }
+    grp[3] = ng;
+    write_secs(b + SEC_PL_GROUPS, 1, grp);
+}
+
 /* ---- track artists ------------------------------------------------------ */
 
 /* Same as the stock Artists pass (FUN_0307a0dc pass 2), over the ARTIST tag. */
@@ -664,6 +1025,8 @@ void cfw_scan(volatile u16 *lib, u32 base)
     st.t_artists = fw_ticks();
 
     build_recent();
+    build_playlists();
+    settings_done();
     st.t_recent = fw_ticks();
 
     log_printf("walk %u ms, record %u ms, sort %u ms, artists %u ms, recent %u ms, total %u ms\r\n",

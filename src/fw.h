@@ -13,6 +13,7 @@ typedef unsigned long long u64;
 #define fw_read        FW(0x0306b36c, int, u32 dev, u32 byteaddr, u32 len, void *buf)
 #define fw_write       FW(0x0306b75e, int, u32 dev, u32 lba, u32 nsec, const void *buf)
 #define DEV_DB         0x30001
+#define fw_dev_info    FW(0x0306b7a6, int, u32 dev, u32 *out)   /* device info, 12 bytes; DB base = u16[2] * 5 */
 
 #define fw_lock        FW(0x0306a40e, void, void)         /* nestable, masks the FS-using IRQs */
 #define fw_unlock      FW(0x0306a466, void, void)
@@ -98,6 +99,20 @@ struct file {
 #define SEC_KEYS           0x52a00   /* cfw: 6 fields x 0x80 sectors, 8 bytes per song */
 #define SEC_HASHES         0x52d00   /* cfw: 6 fields x 0x40 sectors, u32 per song */
 #define SEC_DATES          0x52e80   /* cfw: 0x40 sectors, u32 per song */
+#define SEC_MFILE          0x52ec0   /* cfw: folded file name hash, u32 per song, 0x40 sectors */
+#define SEC_MPARENT        0x52f00   /* cfw: folded parent folder name hash, u32 per song, 0x40 sectors */
+/* The stock sorter owns the 0x1000-sector pages at 0x50000 .. 0x54000 (mod40 / mod23 / mod63 address
+ * base+0x50000, 0x51000, 0x52000, 0x53000 and 0x54000); only the tail of 0x52000 is ours. The playlists
+ * go beyond the last stock page; the DB device is 0x64000 sectors. */
+#define SEC_PL_INFO        0x58000   /* cfw: one sector per playlist: u32 first sector, u32 lines, u16 name[] */
+#define SEC_PL_LINES       0x58100   /* cfw: playlist lines, (dir hash, file hash) 8 bytes each, 64 per sector */
+#define SEC_PL_SONGS       0x58200   /* cfw: Playlists song list, u16 record numbers, 0x20 sectors */
+#define SEC_PL_GROUPS      0x58220   /* cfw: Playlists groups, 8 bytes each, 1 sector; entry 0 u16[3] = count */
+#define SEC_SETTINGS       0x58240   /* cfw: u32 magic, u32 now_playing_album (read by the Now Playing patch) */
+#define SETTINGS_MAGIC     0x5e771a65
+#define NP_STATE           (*(volatile u8 *)0x03073f00)   /* mod00 cave: 0 = reread the sector, 1 artist, 2 album */
+#define PL_MAX             64
+#define PL_LINE_SECS       0x100
 #define MAX_SONGS          8192
 
 #endif

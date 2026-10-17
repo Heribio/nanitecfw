@@ -22,3 +22,7 @@
 
 # tag reading: per-format timing; cfw_scan hooks the file read during the walk
 39 0307af66 bl   cfw_tags                        # FUN_03071178(h, rec, ext)
+
+# playlists: a playlist file is not a song - leave the walker's counters alone
+39 0307b08a bl   cfw_inc_sl                     # add.w r0, sl, #1
+39 0307b092 bl   cfw_inc_slot                   # add.w r0, r9, #1

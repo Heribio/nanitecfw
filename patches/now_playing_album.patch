@@ -1,0 +1,12 @@
+# Now Playing (mod27, MusicWin): the second line shows the album or the artist
+# (settings.txt, now_playing_album=1; see now_playing_toggle_*.S; artist by default).
+#
+# The play-time tag buffer (0x030398c8) holds title +0x60, artist +0x15e, album +0x25c
+# (UTF-16, 0xfe bytes each; filled by the tag parser or from the library record).
+# The line is drawn by FUN_0307adc8; the two instructions that use the artist offset
+# (0x0307adf6, 0x0307ae00) call the helpers in now_playing_toggle_10_mod00_cave.S.
+# A track without that tag leaves the line blank.
+
+# Icon beside that line: image 104 (8x9, drawn at 1,13 only by Now Playing) was a person;
+# a music note now fits both album and artist. Pixels: X lit, . off.
+img:104:...XXXX./...X...X/...X..XX/...X.XX./...X..../...X..../.XXX..../XXXX..../.XX.....

@@ -1,4 +1,4 @@
-# Media Library menu (mod22, MedialibWin): 10 entries.
+# Media Library menu (mod22, MedialibWin): 11 entries.
 #
 # The menu draws and dispatches from a table of 6-byte entries
 # {u16 0, u16 string id, u16 type} (stock: 8 entries at 0x0300e6bc, count
@@ -8,14 +8,16 @@
 # from MusicTypeSelID (library_menu_42_mod22_restore.S maps it to a position).
 #
 # New table in unused zeros of mod22 data (0x0300e708..0x0300e8a7):
-#   pos 0 Now Playing (0x59, 0)    5 Albums (0x5c, 4)
-#       1 All Songs (0x5a, 1)      6 Genres (0x5d, 5)
-#       2 Favorites (0x61, 2)      7 Folder Navigation (0x5f, 0xa)
-#       3 Artists (0x85, 9)        8 Recent Albums (0x87, 7)
-#       4 Album Artists (0x86, 3)  9 Media Library Refresh (0x62, 6)
-# Types 7 and 9 are unused by the stock dispatcher; library_menu_40 handles them.
-22:0300e708:0000 5900 0000  0000 5a00 0100  0000 6100 0200  0000 8500 0900  0000 8600 0300
-22:0300e726:0000 5c00 0400  0000 5d00 0500  0000 5f00 0a00  0000 8700 0700  0000 6200 0600
+#   pos 0 Now Playing (0x59, 0)    5 Album Artists (0x86, 3)
+#       1 All Songs (0x5a, 1)      6 Albums (0x5c, 4)
+#       2 Favorites (0x61, 2)      7 Genres (0x5d, 5)
+#       3 Playlists (0x83, 12)     8 Folder Navigation (0x5f, 0xa)
+#       4 Artists (0x85, 9)        9 Recent Albums (0x87, 7)
+#                                 10 Media Library Refresh (0x62, 6)
+# Types 7, 9 and 12 are unused by the stock dispatcher; library_menu_40 handles them
+# (12 is reached through library_menu_44; 11 is a stock type).
+22:0300e708:0000 5900 0000  0000 5a00 0100  0000 6100 0200  0000 8300 0c00  0000 8500 0900
+22:0300e726:0000 8600 0300  0000 5c00 0400  0000 5d00 0500  0000 5f00 0a00  0000 8700 0700  0000 6200 0600
 
 # Draw and dispatch use the new table (literal-pool pointers). Titles keep
 # the stock table (0x030799e8 unchanged), which is indexed by type.
@@ -26,9 +28,9 @@
 # title it "Album Artists" (stock table row 3 string id).
 22:0300e6d0:8600
 
-# Item count 8 -> 10.
-22:030794f4:0a21                # movs r1, #10   (menu state +0)
-22:03079560:c1f10a00            # rsb.w r0, r1, #10
+# Item count 8 -> 11.
+22:030794f4:0b21                # movs r1, #11   (menu state +0)
+22:03079560:c1f10b00            # rsb.w r0, r1, #11
 
 # Strings 0x85/0x86 ("Ensure Bluetooth Enabled/Disabled!", unused: no
 # Bluetooth hardware) -> "Artists" (stock 0x5b text) / "Album Artists".

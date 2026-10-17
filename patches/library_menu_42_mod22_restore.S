@@ -1,13 +1,14 @@
 @ Media Library menu: cursor on return from a list. mod22_start passes the
 @ window parameter (the browser posts {MusicTypeSelID}) to FUN_030794f2, which
-@ sets MusicTypeSelID and puts the cursor on position = type. With the 10-entry
+@ sets MusicTypeSelID and puts the cursor on position = type. With the 11-entry
 @ table (library_menu.patch) types and positions differ: call it, then move the
 @ cursor to the type's position.
-@ Lives in unused mod22 data (reloaded with the module), after the menu table.
-@ patch 22 0300e744
+@ Lives in unused mod22 data (reloaded with the module), after the menu table
+@ (66 bytes from 0x0300e708).
+@ patch 22 0300e760
 #include "fw.inc"
     .equ    restore, 0x030794f2
-    .equ    NITEMS,  10
+    .equ    NITEMS,  11
 menu_restore:
     push    {r0, lr}
     fbl     restore
@@ -31,6 +32,6 @@ menu_restore:
 1:  pop     {pc}
     .align  2
 pos:                                    @ position of type 0..10
-    .byte   0, 1, 2, 4, 5, 6, 9, 8, 0, 3, 7
+    .byte   0, 1, 2, 5, 6, 7, 10, 9, 0, 4, 8
     .align  2
     .ltorg
