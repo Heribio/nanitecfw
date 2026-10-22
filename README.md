@@ -19,8 +19,8 @@ on your computer.
 |---|---|
 | **Faster library refresh**: about 5× faster on a FLAC-heavy card (148 s → 28 s for 2,000 songs) | tested on device |
 | **Recent Albums** (Media Library): all albums, newest first, by the date the album's folder was created | tested on device |
-| **Shuffle** (main menu, 6th item): shuffle play over the whole card in one press | tested on device; the menu icon is new and not yet confirmed |
-| **Shuffle scope**: Shuffle Play covers the whole card instead of the current folder | tested on device |
+| **Shuffle** (main menu, 6th item): shuffle play over the whole card in one press, whatever Folder Jumping Song is set to | tested on device; the menu icon is new and not yet confirmed |
+| **Shuffle from the Media Library** works as in the stock firmware: an album shuffles within the album; Folder Navigation shuffles the current folder, or the whole card with Folder Jumping Song on | 6.0.6: fixed (6.0.1-6.0.5 shuffled the whole card from Folder Navigation even with Folder Jumping Song off); not yet tested on device |
 | **Unsupported tracks** are skipped without a popup; playback stops after 10 failures in a row | tested on device |
 | **Album Artists / Artists**: the stock Artists list, which groups by album artist, is renamed "Album Artists"; a new "Artists" list groups by each track's own artist | tested on device |
 | `CFWLOG.TXT` in the card's root after each refresh: timings and counters | tested on device |
@@ -109,7 +109,7 @@ date. Everything is applied at build time from three kinds of input:
 - `patches/*.patch`: data patches, written at a runtime address inside a
   firmware module, or as UI strings by ID and language:
   ```
-  32:0307cf14:u"6.0.5"                 # module 32, UTF-16 string + NUL
+  32:0307cf14:u"6.0.6"                 # module 32, UTF-16 string + NUL
   22:030794f4:0a21                     # raw hex bytes
   lang:87:en:u"Recent Albums"          # UI string 0x87, English
   ```
